@@ -1,0 +1,41 @@
+kind: workload
+name: analyzer
+gvc: ${GVC_NAME}
+spec:
+  type: standard
+  identityLink: //gvc/${GVC_NAME}/identity/analyzer-identity
+  containers:
+    - name: analyzer
+      image: ${IMAGE_TAG}
+      ports:
+        - number: 8081
+          protocol: http
+      env:
+        - name: PORT
+          value: "8081"
+        - name: AWS_REGION
+          value: "${AWS_REGION}"
+      readinessProbe:
+        httpGet:
+          path: /health
+          port: 8081
+        initialDelaySeconds: 5
+        periodSeconds: 5
+        failureThreshold: 3
+      livenessProbe:
+        httpGet:
+          path: /healthz
+          port: 8081
+        initialDelaySeconds: 15
+        periodSeconds: 20
+  defaultOptions:
+    autoscaling:
+      metric: rps
+      minScale: 1
+      maxScale: 5
+  firewallConfig:
+    external:
+      inboundAllowCIDR: []
+    internal:
+      inboundAllowType: same-gvc
+      outboundAllowType: same-org

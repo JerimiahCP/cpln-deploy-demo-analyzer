@@ -1,0 +1,91 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Target environment"
+        required: true
+        default: staging
+        type: choice
+        options:
+          - staging
+          - prod
+
+jobs:
+  deploy:
+    name: Deploy to ${{ github.event.inputs.environment || 'staging' }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4.2.2
+
+      - name: Resolve target environment
+        run: |
+          # Push to main always goes to staging.
+          # Manual dispatch can target staging or prod.
+          ENV="${{ github.event.inputs.environment || 'staging' }}"
+          echo "TARGET_ENV=${ENV}"     >> "$GITHUB_ENV"
+          echo "GVC_NAME=stash-${ENV}" >> "$GITHUB_ENV"
+
+      - name: Install cpln CLI
+        run: npm install -g @controlplane/cli
+
+      - name: Configure cpln profile
+        run: cpln profile create default --token "${{ secrets.CPLN_TOKEN }}" --org "${{ vars.CPLN_ORG }}"
+
+      - name: Log in to Control Plane registry
+        run: cpln image docker-login --org "${{ vars.CPLN_ORG }}"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3.10.0
+
+      - name: Build and push image
+        uses: docker/build-push-action@v6.16.0
+        with:
+          context: .
+          push: true
+          platforms: linux/amd64
+          tags: ${{ vars.CPLN_ORG }}.registry.cpln.io/stash-analyzer:${{ github.sha }}
+          cache-from: type=gha
+          cache-to:   type=gha,mode=max
+
+      - name: Render CPLN manifests
+        env:
+          CPLN_ORG:          ${{ vars.CPLN_ORG }}
+          GVC_NAME:          ${{ env.GVC_NAME }}
+          AWS_REGION:        ${{ vars.AWS_REGION }}
+          AWS_CLOUD_ACCOUNT: ${{ vars.AWS_CLOUD_ACCOUNT }}
+          IMAGE_TAG:         ${{ vars.CPLN_ORG }}.registry.cpln.io/stash-analyzer:${{ github.sha }}
+        run: |
+          mkdir -p cpln-rendered
+          envsubst < cpln/identity.yaml  > cpln-rendered/identity.yaml
+          envsubst < cpln/workload.yaml  > cpln-rendered/workload.yaml
+
+      - name: Apply to Control Plane
+        run: cpln apply -f cpln-rendered/ --org "${{ vars.CPLN_ORG }}"
+
+      - name: Wait for rollout
+        run: |
+          echo "Waiting for analyzer to become ready..."
+          for i in $(seq 1 24); do
+            READY=$(cpln workload get analyzer --gvc "$GVC_NAME" --org "${{ vars.CPLN_ORG }}" -o json \
+              | jq -r '.status.readyReplicas // 0')
+            if [ "$READY" -ge 1 ]; then
+              echo "Ready ($READY replica)"
+              break
+            fi
+            echo "  attempt $i/24 — not ready yet..."
+            sleep 10
+          done
+
+      - name: Print status
+        run: |
+          echo ""
+          echo "  version:     ${{ github.sha }}"
+          echo "  environment: $TARGET_ENV"
+          echo "  gvc:         $GVC_NAME"
+          echo "  access:      internal only (same-gvc) — not publicly reachable"

@@ -1,0 +1,52 @@
+name: Teardown Analyzer
+
+# Removes the analyzer workload and identity from a GVC.
+# Does NOT delete the GVC itself — that is owned by cpln-deploy-demo.
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Environment to remove analyzer from"
+        required: true
+        type: choice
+        options:
+          - dev
+          - staging
+          - prod
+      confirm:
+        description: "Type the environment name again to confirm"
+        required: true
+
+jobs:
+  teardown:
+    name: Teardown analyzer from ${{ github.event.inputs.environment }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Validate confirmation
+        run: |
+          if [ "${{ github.event.inputs.environment }}" != "${{ github.event.inputs.confirm }}" ]; then
+            echo "Confirmation does not match. Aborting."
+            exit 1
+          fi
+
+      - name: Install cpln CLI
+        run: npm install -g @controlplane/cli
+
+      - name: Configure cpln profile
+        run: cpln profile create default --token "${{ secrets.CPLN_TOKEN }}" --org "${{ vars.CPLN_ORG }}"
+
+      - name: Delete analyzer workload and identity
+        run: |
+          GVC_NAME="stash-${{ github.event.inputs.environment }}"
+
+          cpln workload delete analyzer \
+            --gvc "$GVC_NAME" --org "${{ vars.CPLN_ORG }}" || true
+
+          cpln identity delete analyzer-identity \
+            --gvc "$GVC_NAME" --org "${{ vars.CPLN_ORG }}" || true
+
+      - name: Summary
+        run: |
+          echo "Removed analyzer from stash-${{ github.event.inputs.environment }}"

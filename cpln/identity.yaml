@@ -1,0 +1,7 @@
+kind: identity
+name: analyzer-identity
+gvc: ${GVC_NAME}
+aws:
+  cloudAccountLink: /org/${CPLN_ORG}/cloudaccount/${AWS_CLOUD_ACCOUNT}
+  policyRefs:
+    - "aws::AmazonS3ReadOnlyAccess"
